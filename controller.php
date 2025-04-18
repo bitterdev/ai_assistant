@@ -27,6 +27,8 @@ class Controller extends Package
 
     public function on_start()
     {
+        require_once ("vendor/autoload.php");
+        
         /** @var ServiceProvider $serviceProvider */
         /** @noinspection PhpUnhandledExceptionInspection */
         $serviceProvider = $this->app->make(ServiceProvider::class);

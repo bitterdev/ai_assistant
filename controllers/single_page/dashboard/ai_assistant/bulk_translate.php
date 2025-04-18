@@ -86,7 +86,7 @@ class BulkTranslate extends DashboardPageController
                     try {
                         $this->contentGeneratorService->bulkTranslatePages($pages, $locale);
 
-                        $this->set('success', t("The pages has been successfully optimized."));
+                        $this->set('success', t("The pages has been successfully translated."));
                     } catch (Exception $e) {
                         $this->error->add($e->getMessage());
                     }

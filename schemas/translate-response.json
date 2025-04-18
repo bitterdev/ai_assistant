@@ -1,0 +1,31 @@
+{
+  "type": "array",
+  "properties": {
+    "pageData": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "properties": {
+          "cID": {
+            "type": "integer"
+          },
+          "blocks": {
+            "type": "array",
+            "properties": {
+              "bID": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "cID"
+        ]
+      }
+    }
+  },
+  "required": [
+    "pageData"
+  ]
+}

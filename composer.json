@@ -6,5 +6,8 @@
     "psr-4": {
       "Bitter\\AiAssistant\\": "src/Bitter/AiAssistant"
     }
+  },
+  "require": {
+    "justinrainbow/json-schema": "^6.4"
   }
 }

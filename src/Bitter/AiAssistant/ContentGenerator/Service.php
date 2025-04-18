@@ -9,13 +9,18 @@ use Concrete\Core\Config\Repository\Repository;
 use Concrete\Core\Database\Connection\Connection;
 use Concrete\Core\Entity\Page\Template;
 use Concrete\Core\Localization\Localization;
+use Concrete\Core\Package\PackageService;
 use Concrete\Core\Page\Page;
 use Concrete\Core\Page\Type\Type;
 use Concrete\Core\User\User;
+use Concrete\Core\View\View;
+use Concrete\Package\AiAssistant\Controller;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Exception;
 use Illuminate\Contracts\Container\BindingResolutionException;
+use JsonSchema\Constraints\Constraint;
+use JsonSchema\Validator;
 
 class Service implements ApplicationAwareInterface
 {
@@ -24,10 +29,13 @@ class Service implements ApplicationAwareInterface
     protected Repository $config;
     protected Client $client;
     protected Connection $db;
+    protected PackageService $packageService;
+    protected Controller $pkg;
 
     public function __construct(
-        Repository $config,
-        Connection $db
+        Repository     $config,
+        Connection     $db,
+        PackageService $packageService
     )
     {
         $this->config = $config;
@@ -35,8 +43,46 @@ class Service implements ApplicationAwareInterface
 
         $this->client = new Client([
             'base_uri' => 'https://api.openai.com/v1/',
-            'timeout' => 30.0,
+            'timeout' => 60.0,
         ]);
+
+        $this->packageService = $packageService;
+        $pkgEntity = $this->packageService->getByHandle("ai_assistant");
+        $this->pkg = $pkgEntity->getController();
+    }
+
+    /**
+     * @throws Exception
+     */
+    protected function validateSchema(string $schemaFile, array $json): bool
+    {
+        $file = $this->pkg->getPackagePath() . "/schemas/" . $schemaFile;
+        $schema = json_decode(file_get_contents($file));
+
+        $validator = new Validator();
+        $validator->validate($json, $schema, Constraint::CHECK_MODE_APPLY_DEFAULTS);
+
+        if ($validator->isValid()) {
+            return true;
+        } else {
+            foreach ($validator->getErrors() as $error) {
+                throw new Exception($error['message']);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @throws Exception
+     */
+    protected function buildPrompt(string $templateFile, array $params = []): string
+    {
+        ob_start();
+        View::element($templateFile, $params, "ai_assistant");
+        $prompt = ob_get_contents();
+        ob_end_clean();
+        return $prompt;
     }
 
     /**
@@ -62,7 +108,6 @@ class Service implements ApplicationAwareInterface
                 ],
             ]);
         } catch (GuzzleException $e) {
-
             $errorMessage = $e->getMessage();
 
             if (method_exists($e, 'getResponse') && $e->getResponse()) {
@@ -79,6 +124,26 @@ class Service implements ApplicationAwareInterface
         $data = json_decode($response->getBody()->getContents(), true);
 
         return $data['choices'][0]['message']['content'] ?? null;
+    }
+
+    /**
+     * @throws Exception
+     */
+    protected function parseResponse(?string $r): ?array
+    {
+        // Remove invalid control characters
+        $json = preg_replace('/[[:cntrl:]]/', '', $r);
+
+        // Enforce UTF-8
+        $json = mb_convert_encoding($json, 'UTF-8', 'UTF-8');
+
+        $r = json_decode($json, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new Exception(json_last_error_msg());
+        }
+
+        return $r;
     }
 
     protected function collectBlockData(Page $page): array
@@ -139,104 +204,30 @@ class Service implements ApplicationAwareInterface
             ];
         }
 
-        $payload = json_encode([
-            "pageData" => $pageData
+        $prompt = $this->buildPrompt("prompts/seo", [
+            "payload" => json_encode([
+                "pageData" => $pageData
+            ])
         ]);
 
-        $prompt = <<<PROMPT
-You will receive a JSON object called "pageData". It contains a list of pages, each with a "cID" (page ID) and an array of "blocks" that include HTML content and other technical data.
+        $response = $this->sendPrompt($prompt);
 
-Your task is to:
+        $parsedResponse = $this->parseResponse($response);
 
-1. Loop through all pages.
-2. Extract the visible text content from all HTML blocks.
-3. Detect the language of the text.
-4. Analyze the semantic content of each page.
-5. Generate SEO metadata for each page:
-   - title: A concise title summarizing the page content (~60 characters).
-   - description: A compelling meta description (~160 characters).
-   - keywords: A list of relevant keywords separated by commas.
+        $this->validateSchema("seo-response.json", $parsedResponse);
 
-Return the result in the following JSON schema:
+        foreach ($parsedResponse["pageData"] as $pageData) {
+            $cID = $pageData["cID"];
+            $title = $pageData["seo"]["title"];
+            $description = $pageData["seo"]["description"];
+            $keywords = $pageData["seo"]["keywords"];
 
-{
-  "pageData": [
-    {
-      "cID": 1,
-      "language": "de",
-      "seo": {
-        "title": "Example Title",
-        "description": "Short, compelling description of the page content.",
-        "keywords": "keyword1, keyword2, keyword3"
-      }
-    },
-    {
-      "cID": 2,
-      "language": "en",
-      "seo": {
-        "title": "Another Sample Title",
-        "description": "Another engaging description here.",
-        "keywords": "keywordA, keywordB, keywordC"
-      }
-    }
-  ]
-}
+            $c = Page::getByID($cID);
 
-Important:
-- Must return valid JSON without line breaks or white-space
-- The "cID" must match exactly between input and output to ensure correct assignment.
-- Provide an SEO object for every page, even if content is minimal or missing.
-- Use the language detected from the extracted text as the "language" value.
-
-Input example:
-{
-  "pageData": [
-    {
-      "cID": 1,
-      "blocks": [ /* HTML content blocks */ ]
-    },
-    {
-      "cID": 2,
-      "blocks": [ /* HTML content blocks */ ]
-    }
-  ]
-}
-
-Input:
-$payload
-PROMPT;
-
-        $json = $this->sendPrompt($prompt);
-
-        $r = json_decode($json, true);
-
-        if (is_array($r) &&
-            isset($r["pageData"]) &&
-            is_array($r["pageData"])) {
-
-            foreach ($r["pageData"] as $pageData) {
-                if (isset($pageData["cID"]) &&
-                    isset($pageData["seo"]) &&
-                    is_array($pageData["seo"]) &&
-                    isset($pageData["seo"]["title"]) &&
-                    isset($pageData["seo"]["description"]) &&
-                    isset($pageData["seo"]["keywords"])) {
-
-                    $cID = $pageData["cID"];
-                    $title = $pageData["seo"]["title"];
-                    $description = $pageData["seo"]["description"];
-                    $keywords = $pageData["seo"]["keywords"];
-
-                    $c = Page::getByID($cID);
-
-                    if ($c instanceof Page) {
-                        $c->setAttribute("meta_title", $title);
-                        $c->setAttribute("meta_description", $description);
-                        $c->setAttribute("meta_keywords", $keywords);
-                    }
-                } else {
-                    throw new Exception(t("Invalid schema."));
-                }
+            if ($c instanceof Page) {
+                $c->setAttribute("meta_title", $title);
+                $c->setAttribute("meta_description", $description);
+                $c->setAttribute("meta_keywords", $keywords);
             }
         }
     }
@@ -261,119 +252,29 @@ PROMPT;
             ];
         }
 
-        $payload = json_encode([
-            "pageData" => $pageData
+        $prompt = $this->buildPrompt("prompts/translate", [
+            "payload" => json_encode([
+                "pageData" => $pageData
+            ]),
+            "targetLocale" => $targetLocale
         ]);
 
-        $prompt = <<<PROMPT
-You will receive a JSON object called "pageData". Each entry has a "cID" (page ID) and a "blocks" array. Each block contains technical data and HTML or text content.
+        $response = $this->sendPrompt($prompt);
 
-Your task is to:
+        $parsedResponse = $this->parseResponse($response);
 
-1. Loop through all pages and blocks.
-2. Keep the structure 100% unchanged – do not change any keys or remove any elements.
-3. Translate all human-readable text values (e.g., content inside "html", "text", "label", etc.).
-4. Preserve the original formatting (e.g., valid HTML structure, whitespace).
-5. Leave all non-text values (e.g., numbers, IDs, booleans) untouched.
-6. Ensure that every input page with its "cID" is present in the output with the same "cID".
+        $this->validateSchema("translate-response.json", $parsedResponse);
 
-Important:
-- Must return valid JSON without line breaks or white-space
-- Do not change any keys or structural elements.
-- The output must be fully valid JSON and exactly match the input format, except for the translated text content.
-- Only translate actual text. Do not translate keys or technical data.
-
-Input:
-{
-  "pageData": [
-    {
-      "cID": 1,
-      "blocks": [
-        { "html": "<h1>Willkommen auf unserer Webseite</h1><p>Wir bieten Lösungen.</p>" },
-        { "label": "Mehr erfahren", "type": "button" }
-      ]
-    },
-    {
-      "cID": 2,
-      "blocks": [
-        { "html": "<p>Kontaktieren Sie uns für weitere Informationen.</p>" }
-      ]
-    }
-  ]
-}
-
-Expected Output:
-{
-  "pageData": [
-    {
-      "cID": 1,
-      "blocks": [
-        { "html": "<h1>Welcome to our website</h1><p>We offer solutions.</p>" },
-        { "label": "Learn more", "type": "button" }
-      ]
-    },
-    {
-      "cID": 2,
-      "blocks": [
-        { "html": "<p>Contact us for more information.</p>" }
-      ]
-    }
-  ]
-}
-
-Input:
-$payload
-PROMPT;
-
-        //$json = $this->sendPrompt($prompt);
-
-        $json = <<<EOL
-{
-  "pageData": [
-    {
-      "cID": 2630,
-      "blocks": {
-        "7832": {
-          "bID": 7832,
-          "content": "<meta charset=\"UTF-8\">\r\n<title><\/title>\r\n<h1>Rabbits<\/h1>\r\n\r\n<h2>General Information about Rabbits:<\/h2>\r\n\r\n<ul>\r\n\t<li>Rabbits belong to the family Leporidae.<\/li>\r\n\t<li>They are mainly known for their long ears and fast movement.<\/li>\r\n<\/ul>\r\n\r\n<h2>Habitat:<\/h2>\r\n\r\n<p>Rabbits live in various habitats including forests, meadows, and fields.<\/p>\r\n\r\n<h2>Nutrition:<\/h2>\r\n\r\n<p>Rabbits are herbivores and mainly feed on grasses, herbs, and roots.<\/p>\r\n\r\n<h2>Reproduction:<\/h2>\r\n\r\n<ul>\r\n\t<li>Female rabbits are called does.<\/li>\r\n\t<li>Rabbits have a short gestation period and usually give birth to multiple offspring.<\/li>\r\n<\/ul>\r\n"
-        },
-        "7835": {
-          "bID": 7835,
-          "arLayoutID": 8
-        },
-        "7834": {
-          "bID": 7834,
-          "icon": "",
-          "title": "I am a Text",
-          "paragraph": "<h2>Male Rabbits<\/h2>\r\n\r\n<p>Male rabbits are called bucks and are an important part of rabbit life. Here are some interesting facts about male rabbits:<\/p>\r\n\r\n<ul>\r\n\t<li>Bucks are usually larger than female rabbits.<\/li>\r\n\t<li>They have distinctive features like longer ears and stronger jaws.<\/li>\r\n\t<li>Male rabbits play a crucial role in reproduction and den protection.<\/li>\r\n\t<li>They are territorial and aggressively defend their territory against intruders.<\/li>\r\n<\/ul>\r\n",
-          "externalLink": "",
-          "internalLinkCID": 0,
-          "titleFormat": "h4",
-          "fID": 0
-        },
-        "7836": {
-          "bID": 7836,
-          "icon": "",
-          "title": "I am a Text",
-          "paragraph": "<meta charset=\"UTF-8\">\r\n<title><\/title>\r\n<h1>Female Rabbits<\/h1>\r\n\r\n<p>Rabbits are cute and popular animals, especially female rabbits have some interesting characteristics:<\/p>\r\n\r\n<h2>Appearance<\/h2>\r\n\r\n<ul>\r\n\t<li>Female rabbits are usually slightly smaller than male rabbits.<\/li>\r\n\t<li>They often have a finer build and are more elegant.<\/li>\n<\/ul>\n\n<h2>Behavior<\/h2>\n\n<ul>\n\t<li>Female rabbits are usually more social than male rabbits.<\/li>\n\t<li>They care lovingly for their young and show protective behavior.<\/li>\n<\/ul>\n\n<h2>Reproduction<\/h2>\n\n<ul>\n\t<li>Female rabbits have a gestation period of about 30 days and give birth to multiple offspring.<\/li>\n\t<li>They are known for their high reproduction rate.<\/li>\n<\/ul>\n",
-          "externalLink": "",
-          "internalLinkCID": 0,
-          "titleFormat": "h4",
-          "fID": 0
+        foreach ($parsedResponse["pageData"] as $pageData) {
+            foreach ($pageData["blocks"] as $row) {
+                $bID = $row["bID"];
+                $b = Block::getByID($bID);
+                if ($b instanceof Block) {
+                    $tableName = $b->getController()->getBlockTypeDatabaseTable();
+                    $this->db->replace($tableName, $row, ['bID']);
+                }
+            }
         }
-      }
-    }
-  ]
-}
-EOL;
-
-        $r = json_decode($json, true);
-
-        // @todo: fix me
-
-        var_dump($json);
-
-        die();
     }
 
     /**
@@ -384,56 +285,22 @@ EOL;
         Template $pageTemplate,
         Type     $pageType,
         string   $pageName,
-        string   $input
+        string   $contentDescription
     ): string
     {
         $u = new User();
-        $locale = Localization::getInstance()->getLocale();
-        $userPrompt = $input;
-        $parentPagePath = $parentPage->getCollectionPath();
-        $userName = $u->getUserName();
 
-        $prompt = <<<EOT
-You are an expert in generating XML content in the Concrete CMS Import Format (CIF version 1.0). Your job is to generate complete and valid CIF XML files for web pages based on the user's instructions.
+        $prompt = $this->buildPrompt("prompts/generate_page", [
+            "locale" => Localization::getInstance()->getLocale(),
+            "parentPagePath" => $parentPage->getCollectionPath(),
+            "userName" => $u->getUserName(),
+            "pageName" => $pageName,
+            "contentDescription" => $contentDescription,
+            "pageTypeHandle" => $pageType->getPageTypeHandle(),
+            "pageTemplateHandle" => $pageTemplate->getPageTemplateHandle()
+        ]);
 
-Please strictly follow this structure:
-
-- The root element must be: <?xml version="1.0" encoding="UTF-8"?><concrete5-cif version="1.0">
-- Include one <page> element below <pages> with the following attributes:
-  - name: The page name, based on user input
-  - path: Auto-generate based on the name (e.g. "/my-page") below parent page base provided by user
-  - public-date: Use current date/time (or fixed demo date)
-  - pagetype: Use the value provided by the user
-  - template: Use the value provided by the user
-  - user: Use the value provided by the user
-  - root="true"
-- Inside the <page>, create one <area name="Main"> with one or more <block> elements.
-
-You may use the following block types:
-- page_title
-- content (btContentLocal)
-- feature_link
-- form
-- youtube
-- faq
-- image (btContentImage, use placeholder {ccm:export:file:placeholder.jpg})
-- core_area_layout with arealayout type="theme-grid" and nested <columns> with <column span="..."> each containing blocks
-
-Blocks can be **nested** via columns inside layouts. Feel free to mix multiple block types. All content must be wrapped in CDATA.
-
-The output must be valid XML and must not contain any explanation or extra text. Output only the raw XML, nothing else.
-
-Here is the user input:
-- Parent Page Path: $parentPagePath
-- Page Name: $pageName
-- User: $userName
-- Page Type: {$pageType->getPageTypeHandle()}
-- Page Template: {$pageTemplate->getPageTemplateHandle()}
-- Locale: $locale
-- Content description: "$userPrompt"
-
-Now generate the full XML in CIF format.
-EOT;
+        // @todo: implement content parser
 
         return $this->sendPrompt($prompt);
     }
@@ -441,26 +308,12 @@ EOT;
     /**
      * @throws Exception
      */
-    public function generateText(string $input): ?string
+    public function generateText(string $contentDescription): ?string
     {
-        $locale = Localization::getInstance()->getLocale();
-
-        $prompt = <<<EOT
-You are a professional web content writer. Your task is to create high-quality, engaging, and SEO-friendly content formatted in HTML.
-
-Here is the user's description of the content they want for their website:
-"$input"
-
-Please follow these rules:
-- Respond strictly in HTML format (e.g. use <h2>, <p>, <ul>, <strong>, etc.)
-- Write in the language that matches the following locale: $locale
-- Use short, structured paragraphs with subheadings
-- Include bullet points or highlights where appropriate
-- Do not include any explanatory text or introductions – output only pure HTML content
-- No Markdown, no plain text – just valid, semantic HTML
-
-Start directly with the HTML output.
-EOT;
+        $prompt = $this->buildPrompt("prompts/generate_text", [
+            "locale" => Localization::getInstance()->getLocale(),
+            "contentDescription" => $contentDescription
+        ]);
 
         return $this->sendPrompt($prompt);
     }
