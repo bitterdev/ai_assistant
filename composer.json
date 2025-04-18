@@ -1,0 +1,10 @@
+{
+  "name": "bitter/ai_assistant",
+  "type": "concrete5-package",
+  "description": "AI Assistant integrates powerful AI features like content generation, translation, and SEO automation directly into Concrete CMS.",
+  "autoload": {
+    "psr-4": {
+      "Bitter\\AiAssistant\\": "src/Bitter/AiAssistant"
+    }
+  }
+}

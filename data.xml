@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<concrete5-cif version="1.0">
+    <singlepages>
+        <page name="AI Assistant" path="/dashboard/ai_assistant" filename="/dashboard/ai_assistant.php"
+              package="ai_assistant"/>
+        <page name="Settings" path="/dashboard/ai_assistant/settings"
+              filename="/dashboard/ai_assistant/settings.php" package="ai_assistant"/>
+        <page name="Content Generator" path="/dashboard/ai_assistant/content_generator"
+              filename="/dashboard/ai_assistant/content_generator.php" package="ai_assistant"/>
+        <page name="Bulk Translate" path="/dashboard/ai_assistant/bulk_translate"
+              filename="/dashboard/ai_assistant/bulk_translate.php" package="ai_assistant"/>
+        <page name="Bulk SEO" path="/dashboard/ai_assistant/bulk_seo"
+              filename="/dashboard/ai_assistant/bulk_seo.php" package="ai_assistant"/>
+    </singlepages>
+</concrete5-cif>
