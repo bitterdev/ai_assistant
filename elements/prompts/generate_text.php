@@ -12,7 +12,7 @@ Here is the user's description of the content they want for their website:
 Please follow these rules:
 - Respond strictly in HTML format (e.g. use <h2>, <p>, <ul>, <strong>, etc.)
 - Write in the language that matches the following locale: $locale
-- Use short, structured paragraphs with subheadings
+- When a word size is given in the content description keep that word size
 - Include bullet points or highlights where appropriate
 - Do not include any explanatory text or introductions – output only pure HTML content
 - No Markdown, no plain text – just valid, semantic HTML

@@ -51,14 +51,14 @@ class Settings extends DashboardPageController
         }
 
         $models = [
-            'gpt-3.5-turbo' => 'GPT-3.5 Turbo',
-            'gpt-3.5-turbo-0125' => 'GPT-3.5 Turbo (Jan 2025)',
-            'gpt-4' => 'GPT-4',
-            'gpt-4-0613' => 'GPT-4 (June 2023)',
-            'gpt-4-1106-preview' => 'GPT-4 Turbo (Preview)',
-            'text-davinci-003' => 'Text-DaVinci 003',
-            'text-embedding-ada-002' => 'Embedding Ada 002',
-            'whisper-1' => 'Whisper Speech-to-Text',
+            'gpt-3.5-turbo' => t('GPT-3.5 Turbo'),
+            'gpt-3.5-turbo-0125' => t('GPT-3.5 Turbo (Jan 2025)'),
+            'gpt-4' => t('GPT-4'),
+            'gpt-4-0613' => t('GPT-4 (June 2023)'),
+            'gpt-4-1106-preview' => t('GPT-4 Turbo (Preview)'),
+            'text-davinci-003' => t('Text-DaVinci 003'),
+            'text-embedding-ada-002' => t('Embedding Ada 002'),
+            'whisper-1' => t('Whisper Speech-to-Text')
         ];
 
         $this->set('models', $models);

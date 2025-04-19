@@ -4,6 +4,7 @@ namespace Bitter\AiAssistant\ContentGenerator;
 
 use Concrete\Core\Application\ApplicationAwareInterface;
 use Concrete\Core\Application\ApplicationAwareTrait;
+use Concrete\Core\Backup\ContentImporter;
 use Concrete\Core\Block\Block;
 use Concrete\Core\Config\Repository\Repository;
 use Concrete\Core\Database\Connection\Connection;
@@ -13,6 +14,7 @@ use Concrete\Core\Package\PackageService;
 use Concrete\Core\Page\Page;
 use Concrete\Core\Page\Type\Type;
 use Concrete\Core\User\User;
+use Concrete\Core\Utility\Service\Text;
 use Concrete\Core\View\View;
 use Concrete\Package\AiAssistant\Controller;
 use GuzzleHttp\Client;
@@ -54,42 +56,18 @@ class Service implements ApplicationAwareInterface
     /**
      * @throws Exception
      */
-    protected function validateSchema(string $schemaFile, array $json): bool
-    {
-        $file = $this->pkg->getPackagePath() . "/schemas/" . $schemaFile;
-        $schema = json_decode(file_get_contents($file));
-
-        $validator = new Validator();
-        $validator->validate($json, $schema, Constraint::CHECK_MODE_APPLY_DEFAULTS);
-
-        if ($validator->isValid()) {
-            return true;
-        } else {
-            foreach ($validator->getErrors() as $error) {
-                throw new Exception($error['message']);
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @throws Exception
-     */
-    protected function buildPrompt(string $templateFile, array $params = []): string
+    protected function sendPrompt(
+        string  $templateFile,
+        array   $params = [],
+        bool    $isJsonResponse = false,
+        ?string $schemaFile = null
+    ): string|array|null
     {
         ob_start();
-        View::element($templateFile, $params, "ai_assistant");
+        View::element("prompts/" . $templateFile, $params, "ai_assistant");
         $prompt = ob_get_contents();
         ob_end_clean();
-        return $prompt;
-    }
 
-    /**
-     * @throws Exception
-     */
-    protected function sendPrompt(string $prompt): ?string
-    {
         try {
             $response = $this->client->post('chat/completions', [
                 'headers' => [
@@ -107,6 +85,43 @@ class Service implements ApplicationAwareInterface
                     'temperature' => 0.7,
                 ],
             ]);
+
+
+            $data = json_decode($response->getBody()->getContents(), true);
+
+            $content = $data['choices'][0]['message']['content'] ?? null;
+
+            if ($isJsonResponse) {
+                // Remove invalid control characters
+                $json = preg_replace('/[[:cntrl:]]/', '', $content);
+
+                // Enforce UTF-8
+                $json = mb_convert_encoding($json, 'UTF-8', 'UTF-8');
+
+                $parsedResponse = json_decode($json, true);
+
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new Exception(json_last_error_msg());
+                }
+
+                if ($schemaFile !== null) {
+                    $file = $this->pkg->getPackagePath() . "/schemas/" . $schemaFile;
+                    $schema = json_decode(file_get_contents($file));
+
+                    $validator = new Validator();
+                    $validator->validate($parsedResponse, $schema, Constraint::CHECK_MODE_APPLY_DEFAULTS);
+
+                    if (!$validator->isValid()) {
+                        foreach ($validator->getErrors() as $error) {
+                            throw new Exception($error['message']);
+                        }
+                    }
+                }
+
+                return $parsedResponse;
+            } else {
+                return $content;
+            }
         } catch (GuzzleException $e) {
             $errorMessage = $e->getMessage();
 
@@ -120,30 +135,6 @@ class Service implements ApplicationAwareInterface
 
             throw new Exception($errorMessage);
         }
-
-        $data = json_decode($response->getBody()->getContents(), true);
-
-        return $data['choices'][0]['message']['content'] ?? null;
-    }
-
-    /**
-     * @throws Exception
-     */
-    protected function parseResponse(?string $r): ?array
-    {
-        // Remove invalid control characters
-        $json = preg_replace('/[[:cntrl:]]/', '', $r);
-
-        // Enforce UTF-8
-        $json = mb_convert_encoding($json, 'UTF-8', 'UTF-8');
-
-        $r = json_decode($json, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new Exception(json_last_error_msg());
-        }
-
-        return $r;
     }
 
     protected function collectBlockData(Page $page): array
@@ -187,13 +178,10 @@ class Service implements ApplicationAwareInterface
     }
 
     /**
-     * @throws Exception
-     *
-     * @var array|Page[] $pages
+     * @param array|Page[] $pages
+     * @return array
      */
-    public function optimizeSeoForMultiplePages(
-        array $pages
-    ): void
+    protected function collectPageData(array $pages): array
     {
         $pageData = [];
 
@@ -204,17 +192,28 @@ class Service implements ApplicationAwareInterface
             ];
         }
 
-        $prompt = $this->buildPrompt("prompts/seo", [
-            "payload" => json_encode([
-                "pageData" => $pageData
-            ])
-        ]);
+        return $pageData;
+    }
 
-        $response = $this->sendPrompt($prompt);
-
-        $parsedResponse = $this->parseResponse($response);
-
-        $this->validateSchema("seo-response.json", $parsedResponse);
+    /**
+     * @throws Exception
+     *
+     * @var array|Page[] $pages
+     */
+    public function optimizeSeoForMultiplePages(
+        array $pages
+    ): void
+    {
+        $parsedResponse = $this->sendPrompt(
+            "seo",
+            [
+                "payload" => json_encode([
+                    "pageData" => $this->collectPageData($pages)
+                ])
+            ],
+            true,
+            "seo-response.json"
+        );
 
         foreach ($parsedResponse["pageData"] as $pageData) {
             $cID = $pageData["cID"];
@@ -243,27 +242,17 @@ class Service implements ApplicationAwareInterface
         string $targetLocale
     ): void
     {
-        $pageData = [];
-
-        foreach ($pages as $page) {
-            $pageData[] = [
-                "cID" => $page->getCollectionID(),
-                "blocks" => $this->collectBlockData($page)
-            ];
-        }
-
-        $prompt = $this->buildPrompt("prompts/translate", [
-            "payload" => json_encode([
-                "pageData" => $pageData
-            ]),
-            "targetLocale" => $targetLocale
-        ]);
-
-        $response = $this->sendPrompt($prompt);
-
-        $parsedResponse = $this->parseResponse($response);
-
-        $this->validateSchema("translate-response.json", $parsedResponse);
+        $parsedResponse = $this->sendPrompt(
+            "translate",
+            [
+                "payload" => json_encode([
+                    "pageData" => $this->collectPageData($pages)
+                ]),
+                "targetLocale" => $targetLocale
+            ],
+            true,
+            "translate-response.json"
+        );
 
         foreach ($parsedResponse["pageData"] as $pageData) {
             foreach ($pageData["blocks"] as $row) {
@@ -286,23 +275,31 @@ class Service implements ApplicationAwareInterface
         Type     $pageType,
         string   $pageName,
         string   $contentDescription
-    ): string
+    ): void
     {
+
         $u = new User();
 
-        $prompt = $this->buildPrompt("prompts/generate_page", [
+        /** @var Text $textService */
+        $textService = $this->app->make(Text::class);
+
+        $xml = $this->sendPrompt(
+            "generate_page", [
             "locale" => Localization::getInstance()->getLocale(),
             "parentPagePath" => $parentPage->getCollectionPath(),
             "userName" => $u->getUserName(),
             "pageName" => $pageName,
+            "pageSlug" => $textService->urlify($pageName),
             "contentDescription" => $contentDescription,
             "pageTypeHandle" => $pageType->getPageTypeHandle(),
             "pageTemplateHandle" => $pageTemplate->getPageTemplateHandle()
         ]);
 
-        // @todo: implement content parser
+        $xml = preg_replace('/<fID>(.*?)<\/fID>/', '<fID>{ccm:export:file:placeholder.jpg}</fID>', $xml);
 
-        return $this->sendPrompt($prompt);
+        $cif = new ContentImporter();
+        $cif->importFiles($this->pkg->getPackagePath() . '/content_files', false);
+        $cif->importContentString($xml);
     }
 
     /**
@@ -310,11 +307,9 @@ class Service implements ApplicationAwareInterface
      */
     public function generateText(string $contentDescription): ?string
     {
-        $prompt = $this->buildPrompt("prompts/generate_text", [
+        return $this->sendPrompt("generate_text", [
             "locale" => Localization::getInstance()->getLocale(),
             "contentDescription" => $contentDescription
         ]);
-
-        return $this->sendPrompt($prompt);
     }
 }

@@ -63,7 +63,7 @@ class BulkSeo extends DashboardPageController
                     try {
                         $this->contentGeneratorService->optimizeSeoForMultiplePages($pages);
 
-                        $this->set('success', t("The pages has been successfully translated."));
+                        $this->set('success', t("The SEO optimization has been successfully applied."));
                     } catch (Exception $e) {
                         $this->error->add($e->getMessage());
                     }
