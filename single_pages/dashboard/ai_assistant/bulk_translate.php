@@ -27,6 +27,8 @@ $token = $app->make(Token::class);
     View::element("dashboard/help", [], "ai_assistant"); ?>
 </div>
 
+<?php \Concrete\Core\View\View::element("dashboard/did_you_know", [], "ai_assistant"); ?>
+
 <form action="#" method="post">
     <?php echo $token->output("bulk_translate"); ?>
 
