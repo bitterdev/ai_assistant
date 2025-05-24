@@ -9,6 +9,7 @@ use Concrete\Core\Block\Block;
 use Concrete\Core\Config\Repository\Repository;
 use Concrete\Core\Database\Connection\Connection;
 use Concrete\Core\Entity\Page\Template;
+use Concrete\Core\File\Service\File;
 use Concrete\Core\Localization\Localization;
 use Concrete\Core\Package\PackageService;
 use Concrete\Core\Page\Page;
@@ -33,11 +34,13 @@ class Service implements ApplicationAwareInterface
     protected Connection $db;
     protected PackageService $packageService;
     protected Controller $pkg;
+    protected File $fileService;
 
     public function __construct(
         Repository     $config,
         Connection     $db,
-        PackageService $packageService
+        PackageService $packageService,
+        File           $fileService
     )
     {
         $this->config = $config;
@@ -49,6 +52,7 @@ class Service implements ApplicationAwareInterface
         ]);
 
         $this->packageService = $packageService;
+        $this->fileService = $fileService;
         $pkgEntity = $this->packageService->getByHandle("ai_assistant");
         $this->pkg = $pkgEntity->getController();
     }
@@ -106,7 +110,7 @@ class Service implements ApplicationAwareInterface
 
                 if ($schemaFile !== null) {
                     $file = $this->pkg->getPackagePath() . "/schemas/" . $schemaFile;
-                    $schema = json_decode(file_get_contents($file));
+                    $schema = json_decode($this->fileService->getContents($file));
 
                     $validator = new Validator();
                     $validator->validate($parsedResponse, $schema, Constraint::CHECK_MODE_APPLY_DEFAULTS);
@@ -223,7 +227,7 @@ class Service implements ApplicationAwareInterface
 
             $c = Page::getByID($cID);
 
-            if ($c instanceof Page) {
+            if ($c instanceof Page && !$c->isError()) {
                 $c->setAttribute("meta_title", $title);
                 $c->setAttribute("meta_description", $description);
                 $c->setAttribute("meta_keywords", $keywords);

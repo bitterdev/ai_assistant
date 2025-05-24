@@ -30,6 +30,10 @@ $token = $app->make(Token::class);
 
 <?php \Concrete\Core\View\View::element("dashboard/did_you_know", [], "ai_assistant"); ?>
 
+<div class="alert alert-warning">
+    <?php echo t("This feature is currently in the beta phase. Occasionally, the content generator may experience issues. In many cases, simply resubmitting the request helps. If a page is still not generated after multiple attempts, please open a support ticket (click on “Get Help” at the top) and include the prompt you used so we can resolve the issue as quickly as possible. Thank you for your understanding."); ?>
+</div>
+
 <form action="#" method="post">
     <?php echo $token->output("generate_content"); ?>
 

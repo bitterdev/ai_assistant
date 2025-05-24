@@ -9,7 +9,7 @@ use Concrete\Core\Package\Package;
 class Controller extends Package
 {
     protected string $pkgHandle = 'ai_assistant';
-    protected string $pkgVersion = '0.0.24';
+    protected string $pkgVersion = '0.0.3';
     protected $appVersionRequired = '9.0.0';
     protected $pkgAutoloaderRegistries = [
         'src/Bitter/AiAssistant' => 'Bitter\AiAssistant',
